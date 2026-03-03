@@ -1,0 +1,18 @@
+{
+  "name": "ibc-explorer",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:decoder": "npm run dev --workspace=packages/denom-decoder",
+    "dev:web": "npm run dev --workspace=packages/web",
+    "dev:indexer": "npm run dev --workspace=packages/indexer",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
