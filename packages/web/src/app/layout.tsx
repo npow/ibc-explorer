@@ -52,7 +52,7 @@ export default function RootLayout({
                   Stuck Packets
                 </Link>
                 <Link
-                  href="/trace/demo"
+                  href="/trace/live"
                   className="rounded-md px-3 py-1.5 text-sm text-[#94a3b8] hover:bg-[#111118] hover:text-[#e2e8f0] transition-colors"
                 >
                   Explorer

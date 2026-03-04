@@ -3,6 +3,28 @@ import DenomDecoder from '@/components/DenomDecoder'
 import StuckPacketCard from '@/components/StuckPacketCard'
 import { STUCK_PACKETS } from '@/data/stuck-packets'
 
+const LIVE_TRACE_LINKS = [
+  {
+    label: 'Noble linked trace',
+    chain: 'noble-1',
+    txHash: 'E71C09567AC9D18AAA4F926690BF51564BD70E2299A5CE5B71436C64A2125DE4',
+  },
+  {
+    label: 'Osmosis linked trace A',
+    chain: 'osmosis-1',
+    txHash: '813DDA59FB3095D0B9282AC440A54FDB7CDED1A0134472A840A26A4C267F87E6',
+  },
+  {
+    label: 'Osmosis linked trace B',
+    chain: 'osmosis-1',
+    txHash: '7D775EE0C74A8564025FA1D953B7A04D441024EF0DA3FF688E60BD2D96161E6F',
+  },
+]
+
+function shortHash(hash: string): string {
+  return `${hash.slice(0, 12)}...${hash.slice(-8)}`
+}
+
 export default function HomePage() {
   return (
     <div className="space-y-20">
@@ -65,6 +87,40 @@ export default function HomePage() {
               <p className="mt-0.5 text-xs font-medium text-[#e2e8f0]">{s.label}</p>
               <p className="text-xs text-[#475569]">{s.sub}</p>
             </div>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <div className="mb-6 flex items-baseline justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-[#e2e8f0]">Live indexed traces</h2>
+            <p className="mt-1 text-sm text-[#94a3b8]">
+              Real transactions you can open directly in the trace UI.
+            </p>
+          </div>
+          <Link
+            href="/trace/live"
+            className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors flex items-center gap-1"
+          >
+            View trace list
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
+              <path d="M2 6h8M7 3l3 3-3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </Link>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {LIVE_TRACE_LINKS.map((t) => (
+            <Link
+              key={t.txHash}
+              href={`/trace/${t.txHash}?chain=${encodeURIComponent(t.chain)}`}
+              className="rounded-lg border border-[#1e1e2e] bg-[#111118] p-4 hover:border-[#2a2a3e] transition-colors"
+            >
+              <p className="text-sm font-medium text-[#e2e8f0]">{t.label}</p>
+              <p className="mt-1 text-xs font-mono text-[#94a3b8]">{t.chain}</p>
+              <p className="mt-1 text-xs font-mono text-[#475569]">{shortHash(t.txHash)}</p>
+            </Link>
           ))}
         </div>
       </section>

@@ -61,7 +61,7 @@ services:
       context: .
       dockerfile: deploy/Dockerfile.web
       args:
-        NEXT_PUBLIC_DECODER_URL: ${NEXT_PUBLIC_DECODER_URL:-http://188.40.64.104:3101}
+        NEXT_PUBLIC_DECODER_URL: ${NEXT_PUBLIC_DECODER_URL:-http://denom-decoder:3001}
     container_name: ibc-explorer-web
     restart: unless-stopped
     depends_on:
