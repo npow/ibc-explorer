@@ -41,11 +41,63 @@ export async function initDb(): Promise<void> {
       const e = err as { code?: string }
       if (e.code !== '42P01') throw err
     }
+    try {
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS transfer_events_chain_tx_dir_idx
+          ON transfer_events (chain_id, tx_hash, direction)
+      `)
+      await client.query(`
+        CREATE INDEX IF NOT EXISTS transfer_events_block_time_idx
+          ON transfer_events (block_time DESC)
+      `)
+    } catch (err) {
+      const e = err as { code?: string }
+      if (e.code !== '42P01') throw err
+    }
     const result = await client.query<{ version: string }>('SELECT version()')
     console.log(`[INDEXER] Postgres: ${result.rows[0].version}`)
   } finally {
     client.release()
   }
+}
+
+export async function backfillTransferLinks(
+  lookbackHours = 168,
+  maxPairs = 20000
+): Promise<number> {
+  const safeHours = Math.max(1, Math.min(24 * 365, Math.floor(lookbackHours)))
+  const safeMaxPairs = Math.max(100, Math.min(500000, Math.floor(maxPairs)))
+
+  const res = await getPool().query(
+    `
+      WITH recent AS (
+        SELECT chain_id, tx_hash, transfer_id, direction
+        FROM transfer_events
+        WHERE block_time > NOW() - ($1::text || ' hours')::INTERVAL
+          AND direction IN ('recv', 'send')
+      ),
+      pairs AS (
+        SELECT DISTINCT
+          r.transfer_id AS from_transfer_id,
+          s.transfer_id AS to_transfer_id
+        FROM recent r
+        JOIN recent s
+          ON s.chain_id = r.chain_id
+         AND s.tx_hash = r.tx_hash
+        WHERE r.direction = 'recv'
+          AND s.direction = 'send'
+          AND r.transfer_id <> s.transfer_id
+        LIMIT $2
+      )
+      INSERT INTO transfer_links (from_transfer_id, to_transfer_id, link_type)
+      SELECT from_transfer_id, to_transfer_id, 'backfill_same_tx_recv_to_send'
+      FROM pairs
+      ON CONFLICT DO NOTHING
+    `,
+    [safeHours, safeMaxPairs]
+  )
+
+  return res.rowCount ?? 0
 }
 
 export async function insertPacket(event: IBCPacketEvent): Promise<void> {

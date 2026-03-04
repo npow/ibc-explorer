@@ -35,6 +35,15 @@ GET /v1/transfers/{tx_hash}?chain=cosmoshub-4
 # → { status: "stuck", hops: [...], last_known_chain: "osmosis-1", stuck_since: "..." }
 ```
 
+**Live demo traces (chainwatch):**
+
+```bash
+https://api-ibc.188.40.64.104.sslip.io/v1/transfers/E71C09567AC9D18AAA4F926690BF51564BD70E2299A5CE5B71436C64A2125DE4?chain=noble-1
+https://api-ibc.188.40.64.104.sslip.io/v1/transfers/813DDA59FB3095D0B9282AC440A54FDB7CDED1A0134472A840A26A4C267F87E6?chain=osmosis-1
+https://api-ibc.188.40.64.104.sslip.io/v1/transfers/7D775EE0C74A8564025FA1D953B7A04D441024EF0DA3FF688E60BD2D96161E6F?chain=osmosis-1
+```
+These are real indexed transactions and may rotate as transfers age out of the active demo window.
+
 **Get channel health between two chains:**
 
 ```bash
@@ -65,6 +74,13 @@ npm test
 ```
 
 See [memory/demos.md](.claude/projects/-root-code-ibc-explorer/memory/demos.md) for the implementation plan for each component.
+
+## Operations
+
+```bash
+# one-command chainwatch health/readiness snapshot
+./deploy/chainwatch-status.sh
+```
 
 ## License
 

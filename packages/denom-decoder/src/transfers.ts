@@ -119,15 +119,18 @@ export async function getTransferTrace(txHash: string, chainId: string) {
   const graphQuery = `
     WITH RECURSIVE graph(transfer_id, depth) AS (
       SELECT $1::text, 0
-      UNION
-      SELECT l.to_transfer_id, g.depth + 1
+      UNION ALL
+      SELECT n.transfer_id, g.depth + 1
       FROM graph g
-      JOIN transfer_links l ON l.from_transfer_id = g.transfer_id
-      WHERE g.depth < 8
-      UNION
-      SELECT l.from_transfer_id, g.depth + 1
-      FROM graph g
-      JOIN transfer_links l ON l.to_transfer_id = g.transfer_id
+      JOIN LATERAL (
+        SELECT l.to_transfer_id AS transfer_id
+        FROM transfer_links l
+        WHERE l.from_transfer_id = g.transfer_id
+        UNION
+        SELECT l.from_transfer_id AS transfer_id
+        FROM transfer_links l
+        WHERE l.to_transfer_id = g.transfer_id
+      ) n ON TRUE
       WHERE g.depth < 8
     )
     SELECT DISTINCT transfer_id

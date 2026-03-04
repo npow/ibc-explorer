@@ -130,5 +130,9 @@ CREATE INDEX IF NOT EXISTS transfer_links_to_idx
   ON transfer_links (to_transfer_id);
 
 CREATE INDEX IF NOT EXISTS transfer_events_tx_hash ON transfer_events (tx_hash);
+CREATE INDEX IF NOT EXISTS transfer_events_chain_tx_dir_idx
+  ON transfer_events (chain_id, tx_hash, direction);
+CREATE INDEX IF NOT EXISTS transfer_events_block_time_idx
+  ON transfer_events (block_time DESC);
 ALTER TABLE transfer_events ADD COLUMN IF NOT EXISTS channel_id TEXT;
 ALTER TABLE transfer_events ADD COLUMN IF NOT EXISTS sequence BIGINT;

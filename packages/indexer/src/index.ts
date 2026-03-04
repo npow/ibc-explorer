@@ -1,4 +1,11 @@
-import { initDb, close, insertPacket, getResumeHeight, upsertCursor } from './db.js'
+import {
+  initDb,
+  close,
+  insertPacket,
+  getResumeHeight,
+  upsertCursor,
+  backfillTransferLinks,
+} from './db.js'
 import {
   TendermintSubscriber,
   type ChainSubscriberConfig,
@@ -101,9 +108,43 @@ async function main() {
   }
   console.log('[INDEXER] Subscribers started')
 
+  const backfillLookbackHours = Number(
+    process.env.TRANSFER_LINK_BACKFILL_LOOKBACK_HOURS ?? '168'
+  )
+  const backfillIntervalMinutes = Number(
+    process.env.TRANSFER_LINK_BACKFILL_INTERVAL_MINUTES ?? '30'
+  )
+  const backfillMaxPairs = Number(
+    process.env.TRANSFER_LINK_BACKFILL_MAX_PAIRS ?? '20000'
+  )
+
+  const runTransferLinkBackfill = async (reason: string) => {
+    try {
+      const inserted = await backfillTransferLinks(
+        backfillLookbackHours,
+        backfillMaxPairs
+      )
+      if (inserted > 0) {
+        console.log(
+          `[INDEXER] transfer link backfill (${reason}) inserted ${inserted} rows`
+        )
+      }
+    } catch (err) {
+      console.error(`[INDEXER] transfer link backfill (${reason}) failed:`, err)
+    }
+  }
+
+  await runTransferLinkBackfill('startup')
+
+  const intervalMs = Math.max(1, backfillIntervalMinutes) * 60 * 1000
+  const backfillTimer = setInterval(() => {
+    runTransferLinkBackfill('interval').catch(() => {})
+  }, intervalMs)
+
   // Graceful shutdown
   process.on('SIGINT', async () => {
     console.log('[INDEXER] Shutting down...')
+    clearInterval(backfillTimer)
     for (const subscriber of subscribers) {
       subscriber.disconnect()
     }
