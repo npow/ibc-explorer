@@ -220,6 +220,98 @@ export async function getResumeHeight(chainId: string): Promise<number> {
   return Number(maxHeightResult.rows[0]?.max_height ?? 0)
 }
 
+export async function getChannelMapping(
+  chainId: string,
+  channelId: string,
+  portId = 'transfer'
+): Promise<{
+  counterparty_chain_id: string | null
+  counterparty_channel_id: string | null
+} | null> {
+  const res = await getPool().query<{
+    counterparty_chain_id: string | null
+    counterparty_channel_id: string | null
+  }>(
+    `
+      SELECT counterparty_chain_id, counterparty_channel_id
+      FROM channels
+      WHERE chain_id = $1 AND channel_id = $2 AND port_id = $3
+      LIMIT 1
+    `,
+    [chainId, channelId, portId]
+  )
+  return res.rows[0] ?? null
+}
+
+export async function upsertChannelMapping(
+  chainId: string,
+  channelId: string,
+  portId: string,
+  counterpartyChainId: string | null,
+  counterpartyChannelId: string | null,
+  state: string | null = null
+): Promise<void> {
+  await getPool().query(
+    `
+      INSERT INTO channels (
+        chain_id, channel_id, port_id,
+        counterparty_chain_id, counterparty_channel_id,
+        state, last_seen_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      ON CONFLICT (chain_id, channel_id, port_id) DO UPDATE SET
+        counterparty_chain_id = COALESCE(EXCLUDED.counterparty_chain_id, channels.counterparty_chain_id),
+        counterparty_channel_id = COALESCE(EXCLUDED.counterparty_channel_id, channels.counterparty_channel_id),
+        state = COALESCE(EXCLUDED.state, channels.state),
+        last_seen_at = NOW()
+    `,
+    [chainId, channelId, portId, counterpartyChainId, counterpartyChannelId, state]
+  )
+}
+
+export async function inferCounterpartyFromPackets(
+  localChainId: string,
+  direction: 'send' | 'recv',
+  srcChannel: string,
+  dstChannel: string,
+  sequence: number
+): Promise<string | null> {
+  const oppositeDirection = direction === 'send' ? 'recv' : 'send'
+
+  const exactRes = await getPool().query<{ chain_id: string }>(
+    `
+      SELECT p.chain_id
+      FROM ibc_packets p
+      WHERE p.chain_id <> $1
+        AND p.direction = $2
+        AND p.src_channel = $3
+        AND p.dst_channel = $4
+        AND p.sequence = $5
+      ORDER BY p.block_time DESC
+      LIMIT 1
+    `,
+    [localChainId, oppositeDirection, srcChannel, dstChannel, sequence]
+  )
+  if (exactRes.rows[0]?.chain_id) return exactRes.rows[0].chain_id
+
+  const recentRes = await getPool().query<{ chain_id: string; c: string | number }>(
+    `
+      SELECT p.chain_id, COUNT(*)::bigint AS c
+      FROM ibc_packets p
+      WHERE p.chain_id <> $1
+        AND p.direction = $2
+        AND p.src_channel = $3
+        AND p.dst_channel = $4
+        AND p.block_time > NOW() - INTERVAL '30 days'
+      GROUP BY p.chain_id
+      ORDER BY c DESC
+      LIMIT 1
+    `,
+    [localChainId, oppositeDirection, srcChannel, dstChannel]
+  )
+  return recentRes.rows[0]?.chain_id ?? null
+}
+
 export async function close(): Promise<void> {
   if (pool) {
     await pool.end()

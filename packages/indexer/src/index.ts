@@ -11,6 +11,7 @@ import {
   type ChainSubscriberConfig,
 } from './rpc.js'
 import { startMetricsServer } from './metrics.js'
+import { ChannelResolver } from './channel-resolver.js'
 
 const DEFAULT_CHAIN_CONFIGS: ChainSubscriberConfig[] = [
   {
@@ -74,6 +75,7 @@ async function main() {
   const metrics = startMetricsServer()
 
   const chainConfigs = parseChainConfigs()
+  const resolver = new ChannelResolver(chainConfigs)
   console.log(
     `[INDEXER] Chains configured: ${chainConfigs.map((c) => c.chainId).join(', ')}`
   )
@@ -86,10 +88,11 @@ async function main() {
     const subscriber = new TendermintSubscriber(
       cfg,
       async (event) => {
-        await insertPacket(event)
+        const enriched = await resolver.enrichEvent(event)
+        await insertPacket(enriched)
         metrics.observePacket(event)
         console.log(
-          `[INDEXER ${cfg.chainId}] ${event.direction.padEnd(7)} ${event.channel_id} seq:${event.sequence} ${event.denom} ${event.amount}`
+          `[INDEXER ${cfg.chainId}] ${enriched.direction.padEnd(7)} ${enriched.channel_id} seq:${enriched.sequence} ${enriched.denom} ${enriched.amount} ${enriched.src_chain_id}->${enriched.dst_chain_id}`
         )
       },
       resumeHeight,
