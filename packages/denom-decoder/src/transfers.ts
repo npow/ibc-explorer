@@ -51,6 +51,10 @@ interface LiveStuckRow {
   updated_at: Date
   stuck_since: Date | null
   tx_hash: string | null
+  verification_status:
+    | 'verified_unresolved_indexed_source'
+    | 'unverifiable_unknown_source'
+    | 'unverifiable_source_not_indexed'
 }
 
 interface LiveLinkedRow {
@@ -356,7 +360,18 @@ export async function listLiveStuckTransfers(limit: number) {
           AND e.tx_hash <> ''
         ORDER BY e.block_time DESC
         LIMIT 1
-      ) AS tx_hash
+      ) AS tx_hash,
+      CASE
+        WHEN h.src_chain_id IS NULL OR h.src_chain_id = 'unknown'
+          THEN 'unverifiable_unknown_source'
+        WHEN EXISTS (
+          SELECT 1
+          FROM indexer_cursors ic
+          WHERE ic.chain_id = h.src_chain_id
+        )
+          THEN 'verified_unresolved_indexed_source'
+        ELSE 'unverifiable_source_not_indexed'
+      END AS verification_status
     FROM transfer_hops h
     WHERE h.hop_index = 0
       AND h.status IN ('stuck', 'failed_ack', 'timeout')
@@ -382,7 +397,105 @@ export async function listLiveStuckTransfers(limit: number) {
     updated_at: new Date(r.updated_at).toISOString(),
     stuck_since: r.stuck_since ? new Date(r.stuck_since).toISOString() : null,
     tx_hash: r.tx_hash,
+    verification_status: r.verification_status,
   }))
+}
+
+export async function getGrantEvidenceStatus() {
+  const top5 = await getGrantReadinessStatus()
+
+  const coverageQuery = `
+    SELECT
+      chain_id,
+      COUNT(*)::bigint AS packet_count,
+      MIN(block_time) AS first_seen_at,
+      MAX(block_time) AS last_seen_at
+    FROM ibc_packets
+    WHERE chain_id = ANY($1::text[])
+    GROUP BY chain_id
+    ORDER BY chain_id
+  `
+  const coverageRes = await getPool().query<{
+    chain_id: string
+    packet_count: string | number
+    first_seen_at: Date | null
+    last_seen_at: Date | null
+  }>(coverageQuery, [top5.phase1_required_chains])
+
+  const coverageByChain = new Map(
+    coverageRes.rows.map((r) => [r.chain_id, r] as const)
+  )
+
+  const coverage = top5.phase1_required_chains.map((chainId) => {
+    const r = coverageByChain.get(chainId)
+    return {
+      chain_id: chainId,
+      packet_count: Number(r?.packet_count ?? 0),
+      first_seen_at: r?.first_seen_at ? new Date(r.first_seen_at).toISOString() : null,
+      last_seen_at: r?.last_seen_at ? new Date(r.last_seen_at).toISOString() : null,
+    }
+  })
+
+  const unknownRes = await getPool().query<{
+    unknown_src: string | number
+    unknown_dst: string | number
+    total_hops: string | number
+  }>(`
+    SELECT
+      COUNT(*) FILTER (WHERE src_chain_id = 'unknown')::bigint AS unknown_src,
+      COUNT(*) FILTER (WHERE dst_chain_id = 'unknown')::bigint AS unknown_dst,
+      COUNT(*)::bigint AS total_hops
+    FROM transfer_hops
+    WHERE started_at > NOW() - INTERVAL '24 hours'
+  `)
+  const unknown = unknownRes.rows[0]
+  const totalHops = Number(unknown?.total_hops ?? 0)
+  const unknownSrc = Number(unknown?.unknown_src ?? 0)
+  const unknownDst = Number(unknown?.unknown_dst ?? 0)
+
+  const stuckVerificationRes = await getPool().query<{
+    verification_status:
+      | 'verified_unresolved_indexed_source'
+      | 'unverifiable_unknown_source'
+      | 'unverifiable_source_not_indexed'
+    count: string | number
+  }>(`
+    SELECT
+      CASE
+        WHEN h.src_chain_id IS NULL OR h.src_chain_id = 'unknown'
+          THEN 'unverifiable_unknown_source'
+        WHEN EXISTS (
+          SELECT 1
+          FROM indexer_cursors ic
+          WHERE ic.chain_id = h.src_chain_id
+        )
+          THEN 'verified_unresolved_indexed_source'
+        ELSE 'unverifiable_source_not_indexed'
+      END AS verification_status,
+      COUNT(*)::bigint AS count
+    FROM transfer_hops h
+    WHERE h.hop_index = 0
+      AND h.status IN ('stuck', 'failed_ack', 'timeout')
+    GROUP BY verification_status
+    ORDER BY verification_status
+  `)
+
+  return {
+    checked_at: new Date().toISOString(),
+    top5,
+    phase1_backfill_coverage: coverage,
+    unknown_attribution_24h: {
+      total_hops: totalHops,
+      unknown_src: unknownSrc,
+      unknown_dst: unknownDst,
+      unknown_src_ratio: totalHops > 0 ? unknownSrc / totalHops : 0,
+      unknown_dst_ratio: totalHops > 0 ? unknownDst / totalHops : 0,
+    },
+    stuck_verification_breakdown: stuckVerificationRes.rows.map((r) => ({
+      verification_status: r.verification_status,
+      count: Number(r.count),
+    })),
+  }
 }
 
 export async function listLiveLinkedTransfers(page: number, limit: number) {
