@@ -63,3 +63,61 @@ CREATE TABLE IF NOT EXISTS channels (
   last_seen_at    TIMESTAMPTZ,
   PRIMARY KEY (chain_id, channel_id, port_id)
 );
+
+-- ── Indexer cursors ─────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS indexer_cursors (
+  chain_id     TEXT PRIMARY KEY,
+  last_height  BIGINT NOT NULL DEFAULT 0,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ── Transfer stitching ───────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS transfers (
+  transfer_id    TEXT PRIMARY KEY,
+  status         TEXT NOT NULL CHECK (status IN ('pending','completed','stuck','timeout','failed_ack')),
+  started_at     TIMESTAMPTZ NOT NULL,
+  updated_at     TIMESTAMPTZ NOT NULL,
+  stuck_since    TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS transfer_hops (
+  transfer_id    TEXT NOT NULL REFERENCES transfers(transfer_id) ON DELETE CASCADE,
+  hop_index      INT  NOT NULL,
+  chain_id       TEXT NOT NULL,
+  channel_id     TEXT NOT NULL,
+  sequence       BIGINT NOT NULL,
+  src_chain_id   TEXT NOT NULL,
+  dst_chain_id   TEXT NOT NULL,
+  src_channel    TEXT NOT NULL,
+  dst_channel    TEXT NOT NULL,
+  denom          TEXT NOT NULL,
+  amount         NUMERIC NOT NULL,
+  sender         TEXT,
+  receiver       TEXT,
+  status         TEXT NOT NULL CHECK (status IN ('pending','completed','stuck','timeout','failed_ack')),
+  started_at     TIMESTAMPTZ NOT NULL,
+  updated_at     TIMESTAMPTZ NOT NULL,
+  stuck_since    TIMESTAMPTZ,
+  PRIMARY KEY (transfer_id, hop_index)
+);
+
+DROP INDEX IF EXISTS transfer_hops_packet_key;
+CREATE INDEX IF NOT EXISTS transfer_hops_src_key
+  ON transfer_hops (src_chain_id, src_channel, sequence);
+
+CREATE TABLE IF NOT EXISTS transfer_events (
+  transfer_id    TEXT NOT NULL REFERENCES transfers(transfer_id) ON DELETE CASCADE,
+  chain_id       TEXT NOT NULL,
+  channel_id     TEXT NOT NULL,
+  sequence       BIGINT NOT NULL,
+  tx_hash        TEXT NOT NULL,
+  direction      TEXT NOT NULL CHECK (direction IN ('send','recv','ack','timeout')),
+  block_time     TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (transfer_id, chain_id, channel_id, sequence, tx_hash, direction)
+);
+
+CREATE INDEX IF NOT EXISTS transfer_events_tx_hash ON transfer_events (tx_hash);
+ALTER TABLE transfer_events ADD COLUMN IF NOT EXISTS channel_id TEXT;
+ALTER TABLE transfer_events ADD COLUMN IF NOT EXISTS sequence BIGINT;

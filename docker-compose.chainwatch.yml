@@ -1,0 +1,142 @@
+services:
+  db:
+    image: timescale/timescaledb:2.16.1-pg16
+    container_name: ibc-explorer-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ibc_explorer
+      POSTGRES_USER: ibc
+      POSTGRES_PASSWORD: ibc_password
+    volumes:
+      - ibc_pg_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/00-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ibc -d ibc_explorer"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  denom-decoder:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.decoder
+    container_name: ibc-explorer-decoder
+    restart: unless-stopped
+    environment:
+      PORT: "3001"
+      DATA_DIR: /data
+      DATABASE_URL: postgresql://ibc:ibc_password@db:5432/ibc_explorer
+    ports:
+      - "3101:3001"
+    volumes:
+      - ibc_decoder_data:/data
+
+  indexer:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.indexer
+    container_name: ibc-explorer-indexer
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://ibc:ibc_password@db:5432/ibc_explorer
+      CHAIN_CONFIGS_JSON: >-
+        [
+          {"chainId":"osmosis-1","rpcWs":"wss://rpc.osmosis.zone/websocket","rpcHttp":"https://rpc.osmosis.zone"},
+          {"chainId":"cosmoshub-4","rpcWs":"wss://rpc-cosmoshub.ecostake.com/websocket","rpcHttp":"https://rpc-cosmoshub.ecostake.com"},
+          {"chainId":"noble-1","rpcWs":"wss://noble-rpc.polkachu.com/websocket","rpcHttp":"https://noble-rpc.polkachu.com"},
+          {"chainId":"neutron-1","rpcWs":"wss://rpc-kralum.neutron-1.neutron.org/websocket","rpcHttp":"https://rpc-kralum.neutron-1.neutron.org"},
+          {"chainId":"stargaze-1","rpcWs":"wss://stargaze-rpc.polkachu.com/websocket","rpcHttp":"https://stargaze-rpc.polkachu.com"},
+          {"chainId":"juno-1","rpcWs":"wss://juno-rpc.polkachu.com/websocket","rpcHttp":"https://juno-rpc.polkachu.com"},
+          {"chainId":"stride-1","rpcWs":"wss://stride-rpc.polkachu.com/websocket","rpcHttp":"https://stride-rpc.polkachu.com"},
+          {"chainId":"axelar-dojo-1","rpcWs":"wss://axelar-rpc.publicnode.com/websocket","rpcHttp":"https://axelar-rpc.publicnode.com"}
+        ]
+      POLL_INTERVAL_MS: "20000"
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.web
+      args:
+        NEXT_PUBLIC_DECODER_URL: ${NEXT_PUBLIC_DECODER_URL:-http://188.40.64.104:3101}
+    container_name: ibc-explorer-web
+    restart: unless-stopped
+    depends_on:
+      - denom-decoder
+    ports:
+      - "3200:3000"
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: ibc-explorer-postgres-exporter
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATA_SOURCE_NAME: postgresql://ibc:ibc_password@db:5432/ibc_explorer?sslmode=disable
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: ibc-explorer-node-exporter
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($|/)
+    volumes:
+      - /:/host:ro,rslave
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: ibc-explorer-cadvisor
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: ibc-explorer-prometheus
+    restart: unless-stopped
+    depends_on:
+      - postgres-exporter
+      - node-exporter
+      - cadvisor
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    ports:
+      - "39090:9090"
+    volumes:
+      - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ibc_prometheus_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: ibc-explorer-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin_change_me
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3900:3000"
+    volumes:
+      - ibc_grafana_data:/var/lib/grafana
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+
+volumes:
+  ibc_pg_data:
+  ibc_decoder_data:
+  ibc_prometheus_data:
+  ibc_grafana_data:

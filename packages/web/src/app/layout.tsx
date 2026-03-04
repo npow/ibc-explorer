@@ -69,7 +69,7 @@ export default function RootLayout({
         <footer className="border-t border-[#1e1e2e] mt-20">
           <div className="mx-auto max-w-6xl px-6 py-6">
             <p className="text-xs text-[#475569]">
-              IBCscan — IBC Transfer Explorer &mdash; alpha build &mdash; data is illustrative
+              IBCscan — IBC Transfer Explorer &mdash; alpha build &mdash; live indexed data where available
             </p>
           </div>
         </footer>

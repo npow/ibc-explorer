@@ -1,0 +1,14 @@
+FROM node:20-bookworm-slim
+WORKDIR /app
+
+COPY package.json package.json
+COPY packages/denom-decoder/package.json packages/denom-decoder/package.json
+RUN npm install --workspace=packages/denom-decoder
+
+COPY tsconfig.json tsconfig.json
+COPY packages/denom-decoder packages/denom-decoder
+
+RUN npm run build --workspace=packages/denom-decoder
+
+EXPOSE 3001
+CMD ["node", "packages/denom-decoder/dist/index.js"]

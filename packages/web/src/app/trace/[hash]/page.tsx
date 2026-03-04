@@ -3,114 +3,143 @@ import Link from 'next/link'
 
 interface Props {
   params: { hash: string }
+  searchParams: { chain?: string }
 }
+
+interface TraceEvent {
+  direction: 'send' | 'recv' | 'ack' | 'timeout'
+  tx_hash: string
+  block_time: string
+}
+
+interface TraceHop {
+  hop_index: number
+  chain_id: string
+  channel_id: string
+  sequence: number
+  src_chain_id: string
+  dst_chain_id: string
+  src_channel: string
+  dst_channel: string
+  denom: string
+  amount: string
+  sender: string | null
+  receiver: string | null
+  status: string
+  started_at: string
+  updated_at: string
+  stuck_since: string | null
+  events: TraceEvent[]
+}
+
+interface TraceResponse {
+  transfer_id: string
+  tx_hash: string
+  chain_id: string
+  status: string
+  hops: TraceHop[]
+  started_at: string | null
+  updated_at: string | null
+}
+
+const API_BASE =
+  process.env.NEXT_PUBLIC_DECODER_URL ?? 'http://localhost:3001'
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return {
     title: `Trace ${params.hash.slice(0, 12)}… — IBCscan`,
-    description: 'Live IBC packet trace — coming soon.',
+    description: 'Live IBC transfer trace from indexed packet events.',
   }
 }
 
-export default function TracePage({ params }: Props) {
-  const { hash } = params
-  const isDemoHash = hash === 'demo'
+async function fetchTrace(hash: string, chain: string): Promise<TraceResponse | null> {
+  const url = `${API_BASE}/v1/transfers/${encodeURIComponent(hash)}?chain=${encodeURIComponent(chain)}`
+  try {
+    const res = await fetch(url, { next: { revalidate: 10 } })
+    if (!res.ok) return null
+    return (await res.json()) as TraceResponse
+  } catch {
+    return null
+  }
+}
+
+function shortHash(hash: string): string {
+  if (hash.length <= 24) return hash
+  return `${hash.slice(0, 16)}…${hash.slice(-8)}`
+}
+
+export default async function TracePage({ params, searchParams }: Props) {
+  const hash = params.hash
+  const chain = searchParams.chain ?? 'osmosis-1'
+  const trace = await fetchTrace(hash, chain)
+
+  if (!trace) {
+    return (
+      <div className="space-y-6 max-w-2xl">
+        <h1 className="text-xl font-semibold text-[#e2e8f0]">Trace not found</h1>
+        <p className="text-sm text-[#94a3b8]">
+          No indexed transfer found for this tx hash on chain <span className="font-mono">{chain}</span>.
+        </p>
+        <Link href="/stuck" className="text-sm text-indigo-400 hover:text-indigo-300">
+          Back to live stuck list
+        </Link>
+      </div>
+    )
+  }
 
   return (
-    <div className="space-y-10 max-w-2xl">
-      {/* Breadcrumb */}
+    <div className="space-y-8 max-w-3xl">
       <nav className="flex items-center gap-2 text-xs text-[#475569]">
         <Link href="/" className="hover:text-[#94a3b8] transition-colors">
           IBCscan
         </Link>
         <span>/</span>
-        <span className="text-[#94a3b8]">trace</span>
+        <Link href="/stuck" className="hover:text-[#94a3b8] transition-colors">
+          Live Stuck
+        </Link>
         <span>/</span>
-        <span className="font-mono text-[#94a3b8] truncate max-w-xs">
-          {isDemoHash ? 'demo' : `${hash.slice(0, 16)}…`}
-        </span>
+        <span className="font-mono text-[#94a3b8]">{shortHash(hash)}</span>
       </nav>
 
-      {/* Tx hash display */}
-      {!isDemoHash && (
-        <div className="rounded-lg border border-[#1e1e2e] bg-[#111118] px-5 py-4">
-          <p className="text-[10px] uppercase tracking-widest text-[#475569] mb-1.5">
-            transaction hash
-          </p>
-          <p className="font-mono text-sm text-[#e2e8f0] break-all">{hash}</p>
+      <div className="rounded-lg border border-[#1e1e2e] bg-[#111118] p-5 space-y-2">
+        <div className="flex flex-wrap gap-3 items-center">
+          <span className="rounded border border-[#1e1e2e] bg-[#0a0a0f] px-2 py-0.5 text-xs font-mono text-[#e2e8f0]">
+            {trace.status}
+          </span>
+          <span className="text-xs text-[#94a3b8]">
+            transfer <span className="font-mono">{trace.transfer_id}</span>
+          </span>
         </div>
-      )}
+        <p className="text-xs text-[#94a3b8] break-all font-mono">{trace.tx_hash}</p>
+      </div>
 
-      {/* Coming soon card */}
-      <div className="rounded-xl border border-[#1e1e2e] bg-[#111118] px-6 py-8 text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-[#1e1e2e] bg-[#0a0a0f]">
-          <svg
-            width="22"
-            height="22"
-            viewBox="0 0 22 22"
-            fill="none"
-            aria-hidden
-          >
-            <circle cx="11" cy="11" r="9" stroke="#475569" strokeWidth="1.5" />
-            <path
-              d="M11 7v4.5l3 1.5"
-              stroke="#6366f1"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </div>
+      <div className="space-y-4">
+        {trace.hops.map((h) => (
+          <div key={`${h.chain_id}-${h.sequence}-${h.hop_index}`} className="rounded-lg border border-[#1e1e2e] bg-[#111118] p-4 space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-[#e2e8f0] font-semibold">Hop {h.hop_index + 1}</span>
+              <span className="font-mono text-[#94a3b8]">{h.chain_id}</span>
+              <span className="font-mono text-[#475569]">seq {h.sequence}</span>
+              <span className="font-mono text-[#475569]">{h.src_channel} -&gt; {h.dst_channel}</span>
+            </div>
 
-        <h1 className="text-lg font-semibold text-[#e2e8f0]">
-          Live packet tracing
-        </h1>
-        <p className="mt-2 text-sm text-[#94a3b8] leading-relaxed max-w-md mx-auto">
-          Live packet tracing is coming in the next release. The indexer will
-          subscribe to IBC events across 52+ chains in real time, enabling
-          per-transaction trace views with full hop-by-hop timelines.
-        </p>
+            <div className="text-xs text-[#94a3b8] font-mono">
+              denom {h.denom} | amount {h.amount}
+            </div>
 
-        <div className="mt-6 rounded-lg border border-[#1e1e2e] bg-[#0a0a0f] px-4 py-3 text-left max-w-sm mx-auto">
-          <p className="text-xs text-[#475569] mb-2 uppercase tracking-widest">
-            Planned for Week 3-4
-          </p>
-          <ul className="space-y-1.5 text-xs text-[#94a3b8]">
-            {[
-              'Real-time WebSocket event indexing',
-              'Per-packet hop graph with latency',
-              'Relayer attribution per channel',
-              'Stuck packet auto-detection + alerts',
-            ].map((item) => (
-              <li key={item} className="flex items-start gap-2">
-                <div className="mt-1 h-1 w-1 rounded-full bg-indigo-500 flex-shrink-0" />
-                {item}
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <p className="mt-6 text-sm text-[#94a3b8]">
-          In the meantime, browse our documented stuck packet cases.
-        </p>
-
-        <div className="mt-4 flex justify-center gap-3">
-          <Link
-            href="/stuck"
-            className="inline-flex items-center gap-1.5 rounded-md bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-600 transition-colors"
-          >
-            Browse stuck packets
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
-              <path d="M3 7h8M8 4l3 3-3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </Link>
-          <Link
-            href="/"
-            className="inline-flex items-center gap-1.5 rounded-md border border-[#1e1e2e] bg-[#0a0a0f] px-4 py-2 text-sm font-medium text-[#94a3b8] hover:text-[#e2e8f0] transition-colors"
-          >
-            Back home
-          </Link>
-        </div>
+            <div className="space-y-1">
+              {h.events.map((e) => (
+                <div key={`${e.tx_hash}-${e.direction}`} className="text-xs text-[#94a3b8] flex flex-wrap gap-2">
+                  <span className="rounded border border-[#1e1e2e] bg-[#0a0a0f] px-1.5 py-0.5 font-mono text-[#e2e8f0]">
+                    {e.direction}
+                  </span>
+                  <span className="font-mono text-[#475569]">{new Date(e.block_time).toISOString()}</span>
+                  <span className="font-mono break-all">{shortHash(e.tx_hash)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )
