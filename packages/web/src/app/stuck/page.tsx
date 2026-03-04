@@ -7,6 +7,8 @@ export const metadata: Metadata = {
     'Live indexed stuck, timeout, and failed-ack IBC transfers from monitored chains.',
 }
 
+export const dynamic = 'force-dynamic'
+
 interface LiveTransfer {
   transfer_id: string
   chain_id: string
@@ -65,7 +67,7 @@ async function fetchLiveTransfers(): Promise<LiveTransfer[]> {
   const url = `${API_BASE}/v1/transfers/stuck?limit=60`
 
   try {
-    const res = await fetch(url, { next: { revalidate: 20 } })
+    const res = await fetch(url, { cache: 'no-store' })
     if (!res.ok) return []
     const json = (await res.json()) as StuckApiResponse
     return Array.isArray(json.items) ? json.items : []
