@@ -114,7 +114,30 @@ export async function getTransferTrace(txHash: string, chainId: string) {
     return null
   }
 
-  const transferId = idsResult.rows[0].transfer_id
+  const seedTransferId = idsResult.rows[0].transfer_id
+
+  const graphQuery = `
+    WITH RECURSIVE graph(transfer_id, depth) AS (
+      SELECT $1::text, 0
+      UNION
+      SELECT l.to_transfer_id, g.depth + 1
+      FROM graph g
+      JOIN transfer_links l ON l.from_transfer_id = g.transfer_id
+      WHERE g.depth < 8
+      UNION
+      SELECT l.from_transfer_id, g.depth + 1
+      FROM graph g
+      JOIN transfer_links l ON l.to_transfer_id = g.transfer_id
+      WHERE g.depth < 8
+    )
+    SELECT DISTINCT transfer_id
+    FROM graph
+  `
+  const graphRes = await getPool().query<{ transfer_id: string }>(
+    graphQuery,
+    [seedTransferId]
+  )
+  const transferIds = graphRes.rows.map((r) => r.transfer_id)
 
   const hopsQuery = `
     SELECT
@@ -123,19 +146,19 @@ export async function getTransferTrace(txHash: string, chainId: string) {
       denom, amount::text AS amount, sender, receiver, status,
       started_at, updated_at, stuck_since
     FROM transfer_hops
-    WHERE transfer_id = $1
-    ORDER BY hop_index ASC
+    WHERE transfer_id = ANY($1::text[])
+    ORDER BY started_at ASC, hop_index ASC
   `
-  const hopsRes = await getPool().query(hopsQuery, [transferId])
+  const hopsRes = await getPool().query(hopsQuery, [transferIds])
   const hopRows = hopsRes.rows.map((r) => mapHopRow(r as Record<string, unknown>))
 
   const eventsQuery = `
     SELECT transfer_id, chain_id, channel_id, sequence, tx_hash, direction, block_time
     FROM transfer_events
-    WHERE transfer_id = $1
+    WHERE transfer_id = ANY($1::text[])
     ORDER BY block_time ASC
   `
-  const eventsRes = await getPool().query<EventRow>(eventsQuery, [transferId])
+  const eventsRes = await getPool().query<EventRow>(eventsQuery, [transferIds])
 
   const eventsByHopKey = new Map<string, EventRow[]>()
   for (const e of eventsRes.rows) {
@@ -144,8 +167,9 @@ export async function getTransferTrace(txHash: string, chainId: string) {
     eventsByHopKey.get(key)!.push(e)
   }
 
-  const hops = hopRows.map((h) => ({
-    hop_index: h.hop_index,
+  const hops = hopRows.map((h, idx) => ({
+    hop_index: idx,
+    transfer_id: h.transfer_id,
     chain_id: h.chain_id,
     channel_id: h.channel_id,
     sequence: h.sequence,
@@ -171,26 +195,124 @@ export async function getTransferTrace(txHash: string, chainId: string) {
   const transferStatusQuery = `
     SELECT status, started_at, updated_at
     FROM transfers
-    WHERE transfer_id = $1
+    WHERE transfer_id = ANY($1::text[])
   `
-  const transferRes = await getPool().query(transferStatusQuery, [transferId])
-  const transfer = transferRes.rows[0] as
-    | { status: HopStatus; started_at: Date; updated_at: Date }
-    | undefined
-  const status = transfer?.status ?? combineStatus(hops.map((h) => h.status))
+  const transferRes = await getPool().query<{
+    status: HopStatus
+    started_at: Date
+    updated_at: Date
+  }>(transferStatusQuery, [transferIds])
+  const status =
+    transferRes.rows.length > 0
+      ? combineStatus(transferRes.rows.map((r) => r.status))
+      : combineStatus(hops.map((h) => h.status))
+
+  const startedAtValues = transferRes.rows.map((r) => r.started_at.getTime())
+  const updatedAtValues = transferRes.rows.map((r) => r.updated_at.getTime())
+  const startedAt =
+    startedAtValues.length > 0
+      ? new Date(Math.min(...startedAtValues)).toISOString()
+      : (hops[0]?.started_at ?? null)
+  const updatedAt =
+    updatedAtValues.length > 0
+      ? new Date(Math.max(...updatedAtValues)).toISOString()
+      : (hops[hops.length - 1]?.updated_at ?? null)
 
   return {
-    transfer_id: transferId,
+    transfer_id: seedTransferId,
+    linked_transfer_ids: transferIds,
     tx_hash: txHash,
     chain_id: chainId,
     status,
     hops,
-    started_at:
-      transfer?.started_at?.toISOString() ?? hops[0]?.started_at ?? null,
-    updated_at:
-      transfer?.updated_at?.toISOString() ??
-      hops[hops.length - 1]?.updated_at ??
-      null,
+    started_at: startedAt,
+    updated_at: updatedAt,
+  }
+}
+
+export async function getGrantReadinessStatus() {
+  const requiredChains = [
+    'cosmoshub-4',
+    'osmosis-1',
+    'neutron-1',
+    'injective-1',
+    'stride-1',
+  ]
+
+  const chainStatsQuery = `
+    SELECT
+      req.chain_id,
+      c.last_height,
+      c.updated_at,
+      COALESCE(h.events_24h, 0) AS events_24h,
+      h.last_event_at
+    FROM (
+      SELECT unnest($1::text[]) AS chain_id
+    ) req
+    LEFT JOIN indexer_cursors c ON c.chain_id = req.chain_id
+    LEFT JOIN (
+      SELECT
+        chain_id,
+        COUNT(*) FILTER (WHERE block_time > NOW() - INTERVAL '24 hours')::bigint AS events_24h,
+        MAX(block_time) AS last_event_at
+      FROM ibc_packets
+      GROUP BY chain_id
+    ) h ON h.chain_id = req.chain_id
+    ORDER BY req.chain_id
+  `
+
+  const chainRes = await getPool().query<{
+    chain_id: string
+    last_height: string | number | null
+    updated_at: Date | null
+    events_24h: string | number
+    last_event_at: Date | null
+  }>(chainStatsQuery, [requiredChains])
+
+  let multihopTransfers = 0
+  try {
+    const multihopRes = await getPool().query<{ count: string | number }>(`
+      SELECT COUNT(*)::bigint AS count
+      FROM (
+        SELECT from_transfer_id
+        FROM transfer_links
+        GROUP BY from_transfer_id
+      ) t
+    `)
+    multihopTransfers = Number(multihopRes.rows[0]?.count ?? 0)
+  } catch {
+    multihopTransfers = 0
+  }
+
+  const freshnessMinutes = Number(process.env['GRANT_CURSOR_FRESH_MINUTES'] ?? '20')
+  const freshCutoffMs = Date.now() - freshnessMinutes * 60 * 1000
+
+  const chains = chainRes.rows.map((r) => ({
+    chain_id: r.chain_id,
+    cursorUpdatedAtIso: r.updated_at ? new Date(r.updated_at).toISOString() : null,
+    lastHeightNum: r.last_height === null ? null : Number(r.last_height),
+    events24hNum: Number(r.events_24h),
+    lastEventAtIso: r.last_event_at ? new Date(r.last_event_at).toISOString() : null,
+  })).map((r) => ({
+    chain_id: r.chain_id,
+    last_height: r.lastHeightNum,
+    cursor_updated_at: r.cursorUpdatedAtIso,
+    events_24h: r.events24hNum,
+    last_event_at: r.lastEventAtIso,
+    ready:
+      r.lastHeightNum !== null &&
+      r.lastHeightNum > 0 &&
+      r.cursorUpdatedAtIso !== null &&
+      new Date(r.cursorUpdatedAtIso).getTime() >= freshCutoffMs,
+  }))
+
+  return {
+    checked_at: new Date().toISOString(),
+    cursor_freshness_minutes: freshnessMinutes,
+    phase1_required_chains: requiredChains,
+    chains,
+    top5_coverage_ready: chains.every((c) => c.ready),
+    multihop_linked_transfers: multihopTransfers,
   }
 }
 

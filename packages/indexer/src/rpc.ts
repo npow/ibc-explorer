@@ -31,6 +31,10 @@ const RECONNECT_BASE_MS  = 5_000
 const RECONNECT_MAX_MS   = 60_000
 
 export type PacketEventCallback = (event: IBCPacketEvent) => Promise<void>
+export type CursorHeartbeatCallback = (
+  chainId: string,
+  height: number
+) => Promise<void>
 
 export interface ChainSubscriberConfig {
   chainId: string
@@ -56,6 +60,7 @@ export class TendermintSubscriber {
     private readonly config: ChainSubscriberConfig,
     private readonly onEvent: PacketEventCallback,
     resumeHeight = 0,
+    private readonly onCursor: CursorHeartbeatCallback,
     private readonly hooks: SubscriberHooks = {}
   ) {
     this.lastProcessedHeight = resumeHeight
@@ -190,10 +195,58 @@ export class TendermintSubscriber {
 
     const events = txResult.result.events
     if (!Array.isArray(events)) {
+      this.processResultEventsMap(msg.result.events, txHash, blockHeight, new Date())
       return
     }
 
     this.processTxEvents(events, txHash, blockHeight, new Date())
+    this.processResultEventsMap(msg.result.events, txHash, blockHeight, new Date())
+  }
+
+  private processResultEventsMap(
+    eventsMap: Record<string, string[]> | undefined,
+    txHash: string,
+    blockHeight: number,
+    blockTime: Date
+  ): void {
+    if (!eventsMap) return
+
+    const types: SupportedEventType[] = [
+      'send_packet',
+      'recv_packet',
+      'acknowledge_packet',
+      'timeout_packet',
+    ]
+
+    for (const type of types) {
+      const prefix = `${type}.`
+      const keys = Object.keys(eventsMap).filter((k) => k.startsWith(prefix))
+      if (keys.length === 0) continue
+
+      let rows = 0
+      for (const k of keys) {
+        rows = Math.max(rows, eventsMap[k]?.length ?? 0)
+      }
+      if (rows === 0) continue
+
+      for (let i = 0; i < rows; i++) {
+        const attrs: Array<{ key: string; value: string; index?: boolean }> = []
+        for (const k of keys) {
+          const arr = eventsMap[k]
+          if (!Array.isArray(arr) || arr.length === 0) continue
+          const value = arr[i] ?? arr[arr.length - 1]
+          if (value === undefined) continue
+          attrs.push({ key: k.slice(prefix.length), value })
+        }
+
+        this.processTxEvents(
+          [{ type, attributes: attrs }],
+          txHash,
+          blockHeight,
+          blockTime
+        )
+      }
+    }
   }
 
   private processTxEvents(
@@ -253,6 +306,7 @@ export class TendermintSubscriber {
     try {
       const latest = await this.fetchLatestHeight()
       if (!latest || latest <= 0) return
+      await this.onCursor(this.config.chainId, latest)
 
       if (this.lastProcessedHeight <= 0) {
         // Start at chain tip to avoid huge cold-start backfill over public RPC.

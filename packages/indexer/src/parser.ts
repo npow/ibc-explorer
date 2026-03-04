@@ -24,19 +24,42 @@ interface PacketData {
 }
 
 function parsePacketData(raw: string): PacketData {
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (typeof parsed !== 'object' || parsed === null) return {}
-    const obj = parsed as Record<string, unknown>
-    const result: PacketData = {}
-    if (typeof obj['denom'] === 'string')    result.denom    = obj['denom']
-    if (typeof obj['amount'] === 'string')   result.amount   = obj['amount']
-    if (typeof obj['sender'] === 'string')   result.sender   = obj['sender']
-    if (typeof obj['receiver'] === 'string') result.receiver = obj['receiver']
-    return result
-  } catch {
-    return {}
+  const tryParseJson = (input: string): PacketData | null => {
+    try {
+      const parsed: unknown = JSON.parse(input)
+      if (typeof parsed !== 'object' || parsed === null) return null
+      const obj = parsed as Record<string, unknown>
+      const result: PacketData = {}
+      if (typeof obj['denom'] === 'string')    result.denom    = obj['denom']
+      if (typeof obj['amount'] === 'string')   result.amount   = obj['amount']
+      if (typeof obj['sender'] === 'string')   result.sender   = obj['sender']
+      if (typeof obj['receiver'] === 'string') result.receiver = obj['receiver']
+      return result
+    } catch {
+      return null
+    }
   }
+
+  const direct = tryParseJson(raw)
+  if (direct) return direct
+
+  // Some chains expose packet_data as base64-encoded JSON bytes.
+  try {
+    const decoded = Buffer.from(raw, 'base64').toString('utf8')
+    const fromB64 = tryParseJson(decoded)
+    if (fromB64) return fromB64
+  } catch {
+    // ignore
+  }
+
+  return {}
+}
+
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  for (const v of values) {
+    if (typeof v === 'string' && v.length > 0) return v
+  }
+  return undefined
 }
 
 function decodeAckSuccess(packetAck: string): boolean | undefined {
@@ -60,6 +83,17 @@ function decodeAckSuccess(packetAck: string): boolean | undefined {
   } catch {
     return undefined
   }
+}
+
+function inferCounterpartyChain(
+  chainId: string,
+  localChannelId: string
+): string {
+  // Static channel map currently covers Osmosis channels only.
+  if (chainId === 'osmosis-1') {
+    return resolveCounterparty(localChannelId)?.chain_id ?? 'unknown'
+  }
+  return 'unknown'
 }
 
 export function parsePacketEvent(
@@ -91,32 +125,30 @@ export function parsePacketEvent(
     return null
   }
 
-  // Resolve chain IDs from channel registry.
-  // For send/ack/timeout the src channel belongs to Osmosis; for recv the dst channel does.
+  // Resolve chain IDs.
+  // For send/ack/timeout the local chain is source; for recv the local chain is destination.
+  // Counterparty is inferred only when we have chain-specific channel mappings.
   let srcChainId: string
   let dstChainId: string
 
   if (eventType === 'recv_packet') {
-    // Osmosis is receiving — dst channel is the Osmosis-side channel
-    const counterparty = resolveCounterparty(dstChannel)
-    srcChainId = counterparty?.chain_id ?? 'unknown'
+    srcChainId = inferCounterpartyChain(chainId, dstChannel)
     dstChainId = chainId
   } else {
-    // Osmosis is sending (send/ack/timeout) — src channel is the Osmosis-side channel
-    const counterparty = resolveCounterparty(srcChannel)
     srcChainId = chainId
-    dstChainId = counterparty?.chain_id ?? 'unknown'
+    dstChainId = inferCounterpartyChain(chainId, srcChannel)
   }
 
   // Parse packet_data for transfer details
   const packetDataRaw = attrs['packet_data']
-  if (!packetDataRaw) {
+  if (!packetDataRaw && !attrs['packet_data_denom']) {
     return null
   }
-  const packetData = parsePacketData(packetDataRaw)
+  const packetData = packetDataRaw ? parsePacketData(packetDataRaw) : {}
 
-  const denom  = packetData.denom  ?? ''
-  const amount = packetData.amount ?? '0'
+  const denom = firstNonEmpty(packetData.denom, attrs['packet_data_denom']) ?? ''
+  const amount =
+    firstNonEmpty(packetData.amount, attrs['packet_data_amount']) ?? '0'
 
   if (!denom) {
     return null
@@ -142,8 +174,13 @@ export function parsePacketEvent(
     raw_event:    attrs,
   }
 
-  if (packetData.sender)   event.sender   = packetData.sender
-  if (packetData.receiver) event.receiver = packetData.receiver
+  const sender = firstNonEmpty(packetData.sender, attrs['packet_data_sender'])
+  const receiver = firstNonEmpty(
+    packetData.receiver,
+    attrs['packet_data_receiver']
+  )
+  if (sender) event.sender = sender
+  if (receiver) event.receiver = receiver
 
   // Decode acknowledgement result for ack events
   if (eventType === 'acknowledge_packet' && attrs['packet_ack']) {

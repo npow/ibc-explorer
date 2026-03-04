@@ -2,7 +2,11 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { decode } from './decoder.js'
 import { getCacheStats } from './cache.js'
-import { getTransferTrace, listLiveStuckTransfers } from './transfers.js'
+import {
+  getGrantReadinessStatus,
+  getTransferTrace,
+  listLiveStuckTransfers,
+} from './transfers.js'
 
 const app = new Hono()
 
@@ -133,6 +137,17 @@ app.get('/v1/transfers/:txHash', async (c) => {
       )
     }
     return c.json(trace)
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : 'An unexpected error occurred.'
+    return c.json({ error: message }, 500)
+  }
+})
+
+app.get('/v1/status/grant-readiness', async (c) => {
+  try {
+    const status = await getGrantReadinessStatus()
+    return c.json(status)
   } catch (err) {
     const message =
       err instanceof Error ? err.message : 'An unexpected error occurred.'

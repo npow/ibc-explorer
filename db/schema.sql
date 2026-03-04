@@ -118,6 +118,17 @@ CREATE TABLE IF NOT EXISTS transfer_events (
   PRIMARY KEY (transfer_id, chain_id, channel_id, sequence, tx_hash, direction)
 );
 
+CREATE TABLE IF NOT EXISTS transfer_links (
+  from_transfer_id TEXT NOT NULL REFERENCES transfers(transfer_id) ON DELETE CASCADE,
+  to_transfer_id   TEXT NOT NULL REFERENCES transfers(transfer_id) ON DELETE CASCADE,
+  link_type        TEXT NOT NULL,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (from_transfer_id, to_transfer_id)
+);
+
+CREATE INDEX IF NOT EXISTS transfer_links_to_idx
+  ON transfer_links (to_transfer_id);
+
 CREATE INDEX IF NOT EXISTS transfer_events_tx_hash ON transfer_events (tx_hash);
 ALTER TABLE transfer_events ADD COLUMN IF NOT EXISTS channel_id TEXT;
 ALTER TABLE transfer_events ADD COLUMN IF NOT EXISTS sequence BIGINT;

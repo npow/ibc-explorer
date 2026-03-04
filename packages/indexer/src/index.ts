@@ -1,4 +1,4 @@
-import { initDb, close, insertPacket, getResumeHeight } from './db.js'
+import { initDb, close, insertPacket, getResumeHeight, upsertCursor } from './db.js'
 import {
   TendermintSubscriber,
   type ChainSubscriberConfig,
@@ -86,6 +86,7 @@ async function main() {
         )
       },
       resumeHeight,
+      upsertCursor,
       {
         onConnectionState: (chainId, connected) => {
           metrics.markConnection(chainId, connected)

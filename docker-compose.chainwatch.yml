@@ -45,9 +45,10 @@ services:
       CHAIN_CONFIGS_JSON: >-
         [
           {"chainId":"osmosis-1","rpcWs":"wss://rpc.osmosis.zone/websocket","rpcHttp":"https://rpc.osmosis.zone"},
-          {"chainId":"cosmoshub-4","rpcWs":"wss://rpc-cosmoshub.ecostake.com/websocket","rpcHttp":"https://rpc-cosmoshub.ecostake.com"},
+          {"chainId":"cosmoshub-4","rpcWs":"wss://cosmos-rpc.publicnode.com/websocket","rpcHttp":"https://cosmos-rpc.publicnode.com"},
           {"chainId":"noble-1","rpcWs":"wss://noble-rpc.polkachu.com/websocket","rpcHttp":"https://noble-rpc.polkachu.com"},
           {"chainId":"neutron-1","rpcWs":"wss://rpc-kralum.neutron-1.neutron.org/websocket","rpcHttp":"https://rpc-kralum.neutron-1.neutron.org"},
+          {"chainId":"injective-1","rpcWs":"wss://injective-rpc.publicnode.com/websocket","rpcHttp":"https://injective-rpc.publicnode.com"},
           {"chainId":"stargaze-1","rpcWs":"wss://stargaze-rpc.polkachu.com/websocket","rpcHttp":"https://stargaze-rpc.polkachu.com"},
           {"chainId":"juno-1","rpcWs":"wss://juno-rpc.polkachu.com/websocket","rpcHttp":"https://juno-rpc.polkachu.com"},
           {"chainId":"stride-1","rpcWs":"wss://stride-rpc.polkachu.com/websocket","rpcHttp":"https://stride-rpc.polkachu.com"},

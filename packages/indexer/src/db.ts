@@ -27,6 +27,20 @@ export async function initDb(): Promise<void> {
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `)
+    try {
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS transfer_links (
+          from_transfer_id TEXT NOT NULL REFERENCES transfers(transfer_id) ON DELETE CASCADE,
+          to_transfer_id   TEXT NOT NULL REFERENCES transfers(transfer_id) ON DELETE CASCADE,
+          link_type        TEXT NOT NULL,
+          created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (from_transfer_id, to_transfer_id)
+        )
+      `)
+    } catch (err) {
+      const e = err as { code?: string }
+      if (e.code !== '42P01') throw err
+    }
     const result = await client.query<{ version: string }>('SELECT version()')
     console.log(`[INDEXER] Postgres: ${result.rows[0].version}`)
   } finally {
@@ -72,7 +86,7 @@ export async function insertPacket(event: IBCPacketEvent): Promise<void> {
   ])
 
   await upsertTransfer(event)
-  await advanceCursor(event.chain_id, event.block_height)
+  await upsertCursor(event.chain_id, event.block_height)
 }
 
 export async function getPendingPackets(
@@ -207,6 +221,8 @@ async function upsertTransfer(event: IBCPacketEvent): Promise<void> {
     [transferId, status, event.block_time]
   )
 
+  await maybeLinkTransfers(event, transferId)
+
   // One-hop graph row keyed by packet identity. Future multi-hop linkage can add hop_index > 0.
   await getPool().query(
     `
@@ -307,7 +323,71 @@ async function upsertTransfer(event: IBCPacketEvent): Promise<void> {
   )
 }
 
-async function advanceCursor(chainId: string, height: number): Promise<void> {
+async function maybeLinkTransfers(
+  event: IBCPacketEvent,
+  transferId: string
+): Promise<void> {
+  // Packet Forward Middleware commonly emits recv_packet + send_packet
+  // in the same tx on an intermediate chain; link these as multi-hop edges.
+  if (event.direction === 'send') {
+    const parentRes = await getPool().query<{ transfer_id: string }>(
+      `
+        SELECT e.transfer_id
+        FROM transfer_events e
+        WHERE e.chain_id = $1
+          AND e.tx_hash = $2
+          AND e.direction = 'recv'
+          AND e.transfer_id <> $3
+        ORDER BY e.block_time DESC
+        LIMIT 1
+      `,
+      [event.chain_id, event.tx_hash, transferId]
+    )
+
+    const parent = parentRes.rows[0]?.transfer_id
+    if (!parent) return
+
+    await getPool().query(
+      `
+        INSERT INTO transfer_links (from_transfer_id, to_transfer_id, link_type)
+        VALUES ($1, $2, 'same_tx_recv_to_send')
+        ON CONFLICT DO NOTHING
+      `,
+      [parent, transferId]
+    )
+    return
+  }
+
+  if (event.direction === 'recv') {
+    const childRes = await getPool().query<{ transfer_id: string }>(
+      `
+        SELECT e.transfer_id
+        FROM transfer_events e
+        WHERE e.chain_id = $1
+          AND e.tx_hash = $2
+          AND e.direction = 'send'
+          AND e.transfer_id <> $3
+        ORDER BY e.block_time ASC
+        LIMIT 1
+      `,
+      [event.chain_id, event.tx_hash, transferId]
+    )
+
+    const child = childRes.rows[0]?.transfer_id
+    if (!child) return
+
+    await getPool().query(
+      `
+        INSERT INTO transfer_links (from_transfer_id, to_transfer_id, link_type)
+        VALUES ($1, $2, 'same_tx_recv_to_send')
+        ON CONFLICT DO NOTHING
+      `,
+      [transferId, child]
+    )
+  }
+}
+
+export async function upsertCursor(chainId: string, height: number): Promise<void> {
   try {
     await getPool().query(
     `
