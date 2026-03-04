@@ -3,29 +3,39 @@ import DenomDecoder from '@/components/DenomDecoder'
 import StuckPacketCard from '@/components/StuckPacketCard'
 import { STUCK_PACKETS } from '@/data/stuck-packets'
 
-const LIVE_TRACE_LINKS = [
-  {
-    label: 'Noble linked trace',
-    chain: 'noble-1',
-    txHash: 'E71C09567AC9D18AAA4F926690BF51564BD70E2299A5CE5B71436C64A2125DE4',
-  },
-  {
-    label: 'Osmosis linked trace A',
-    chain: 'osmosis-1',
-    txHash: '813DDA59FB3095D0B9282AC440A54FDB7CDED1A0134472A840A26A4C267F87E6',
-  },
-  {
-    label: 'Osmosis linked trace B',
-    chain: 'osmosis-1',
-    txHash: '7D775EE0C74A8564025FA1D953B7A04D441024EF0DA3FF688E60BD2D96161E6F',
-  },
-]
+interface LiveLinkedItem {
+  chain_id: string
+  tx_hash: string
+  linked_transfers: number
+  last_seen_at: string
+}
+
+interface LiveLinkedResponse {
+  items: LiveLinkedItem[]
+}
+
+const API_BASE =
+  process.env.NEXT_PUBLIC_DECODER_URL ?? 'http://localhost:3001'
 
 function shortHash(hash: string): string {
   return `${hash.slice(0, 12)}...${hash.slice(-8)}`
 }
 
-export default function HomePage() {
+async function fetchLiveLinks(): Promise<LiveLinkedItem[]> {
+  const url = `${API_BASE}/v1/transfers/live-linked?page=1&limit=3`
+  try {
+    const res = await fetch(url, { next: { revalidate: 15 } })
+    if (!res.ok) return []
+    const json = (await res.json()) as LiveLinkedResponse
+    return json.items ?? []
+  } catch {
+    return []
+  }
+}
+
+export default async function HomePage() {
+  const liveLinks = await fetchLiveLinks()
+
   return (
     <div className="space-y-20">
       {/* ── Hero ─────────────────────────────────────────────────────────── */}
@@ -111,17 +121,22 @@ export default function HomePage() {
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {LIVE_TRACE_LINKS.map((t) => (
+          {liveLinks.map((t) => (
             <Link
-              key={t.txHash}
-              href={`/trace/${t.txHash}?chain=${encodeURIComponent(t.chain)}`}
+              key={`${t.chain_id}-${t.tx_hash}`}
+              href={`/trace/${t.tx_hash}?chain=${encodeURIComponent(t.chain_id)}`}
               className="rounded-lg border border-[#1e1e2e] bg-[#111118] p-4 hover:border-[#2a2a3e] transition-colors"
             >
-              <p className="text-sm font-medium text-[#e2e8f0]">{t.label}</p>
-              <p className="mt-1 text-xs font-mono text-[#94a3b8]">{t.chain}</p>
-              <p className="mt-1 text-xs font-mono text-[#475569]">{shortHash(t.txHash)}</p>
+              <p className="text-sm font-medium text-[#e2e8f0]">{t.chain_id}</p>
+              <p className="mt-1 text-xs font-mono text-[#94a3b8]">{shortHash(t.tx_hash)}</p>
+              <p className="mt-1 text-xs text-[#475569]">linked {t.linked_transfers}</p>
             </Link>
           ))}
+          {liveLinks.length === 0 && (
+            <div className="rounded-lg border border-[#1e1e2e] bg-[#111118] p-4 text-sm text-[#94a3b8]">
+              No live linked traces available yet.
+            </div>
+          )}
         </div>
       </section>
 

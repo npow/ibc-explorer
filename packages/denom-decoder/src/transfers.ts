@@ -53,6 +53,13 @@ interface LiveStuckRow {
   tx_hash: string | null
 }
 
+interface LiveLinkedRow {
+  chain_id: string
+  tx_hash: string
+  linked_transfers: string | number
+  last_seen_at: Date
+}
+
 let pool: pg.Pool | null = null
 
 function getPool(): pg.Pool {
@@ -376,4 +383,68 @@ export async function listLiveStuckTransfers(limit: number) {
     stuck_since: r.stuck_since ? new Date(r.stuck_since).toISOString() : null,
     tx_hash: r.tx_hash,
   }))
+}
+
+export async function listLiveLinkedTransfers(page: number, limit: number) {
+  const safeLimit = Number.isFinite(limit)
+    ? Math.max(1, Math.min(100, Math.floor(limit)))
+    : 20
+  const safePage = Number.isFinite(page)
+    ? Math.max(1, Math.floor(page))
+    : 1
+  const offset = (safePage - 1) * safeLimit
+
+  const countQuery = `
+    WITH linked AS (
+      SELECT from_transfer_id AS transfer_id FROM transfer_links
+      UNION
+      SELECT to_transfer_id AS transfer_id FROM transfer_links
+    )
+    SELECT COUNT(*)::bigint AS total
+    FROM (
+      SELECT e.chain_id, e.tx_hash
+      FROM transfer_events e
+      WHERE e.transfer_id IN (SELECT transfer_id FROM linked)
+      GROUP BY e.chain_id, e.tx_hash
+      HAVING COUNT(DISTINCT e.transfer_id) > 1
+    ) t
+  `
+  const countRes = await getPool().query<{ total: string | number }>(countQuery)
+  const total = Number(countRes.rows[0]?.total ?? 0)
+
+  const itemsQuery = `
+    WITH linked AS (
+      SELECT from_transfer_id AS transfer_id FROM transfer_links
+      UNION
+      SELECT to_transfer_id AS transfer_id FROM transfer_links
+    )
+    SELECT
+      e.chain_id,
+      e.tx_hash,
+      COUNT(DISTINCT e.transfer_id)::bigint AS linked_transfers,
+      MAX(e.block_time) AS last_seen_at
+    FROM transfer_events e
+    WHERE e.transfer_id IN (SELECT transfer_id FROM linked)
+    GROUP BY e.chain_id, e.tx_hash
+    HAVING COUNT(DISTINCT e.transfer_id) > 1
+    ORDER BY last_seen_at DESC
+    LIMIT $1 OFFSET $2
+  `
+  const itemsRes = await getPool().query<LiveLinkedRow>(itemsQuery, [
+    safeLimit,
+    offset,
+  ])
+
+  return {
+    page: safePage,
+    limit: safeLimit,
+    total,
+    total_pages: Math.max(1, Math.ceil(total / safeLimit)),
+    items: itemsRes.rows.map((r) => ({
+      chain_id: r.chain_id,
+      tx_hash: r.tx_hash,
+      linked_transfers: Number(r.linked_transfers),
+      last_seen_at: new Date(r.last_seen_at).toISOString(),
+    })),
+  }
 }

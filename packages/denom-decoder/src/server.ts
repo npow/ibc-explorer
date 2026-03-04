@@ -5,6 +5,7 @@ import { getCacheStats } from './cache.js'
 import {
   getGrantReadinessStatus,
   getTransferTrace,
+  listLiveLinkedTransfers,
   listLiveStuckTransfers,
 } from './transfers.js'
 
@@ -113,6 +114,22 @@ app.get('/v1/transfers/stuck', async (c) => {
       count: rows.length,
       items: rows,
     })
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : 'An unexpected error occurred.'
+    return c.json({ error: message }, 500)
+  }
+})
+
+app.get('/v1/transfers/live-linked', async (c) => {
+  const pageRaw = c.req.query('page')
+  const limitRaw = c.req.query('limit')
+  const page = pageRaw ? Number(pageRaw) : 1
+  const limit = limitRaw ? Number(limitRaw) : 20
+
+  try {
+    const result = await listLiveLinkedTransfers(page, limit)
+    return c.json(result)
   } catch (err) {
     const message =
       err instanceof Error ? err.message : 'An unexpected error occurred.'
