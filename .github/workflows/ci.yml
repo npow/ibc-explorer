@@ -7,12 +7,15 @@ on:
     branches: [main]
 
 jobs:
+  # The repo is an npm workspace (packages/*) with the lockfile at the root.
+  # Running `npm ci` from inside a sub-package can't find that lockfile, so
+  # devDependencies (jest, tsx, etc.) never get installed there and the
+  # subsequent `npm test` fails with "Cannot find module .../node_modules/.bin/jest".
+  # Install once at the root, then dispatch each package's script via
+  # --workspace= so the workspace-hoisted deps resolve correctly.
   decoder:
     name: denom-decoder
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/denom-decoder
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,14 +23,11 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm test
+      - run: npm test --workspace=packages/denom-decoder
 
   indexer:
     name: indexer
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/indexer
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,14 +35,11 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm test
+      - run: npm test --workspace=packages/indexer
 
   web:
     name: web
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/web
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,4 +47,4 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm run build
+      - run: npm run build --workspace=packages/web
